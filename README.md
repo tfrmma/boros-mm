@@ -1,6 +1,6 @@
 # boros-mm
 
-Production market making and relative-value system for [Boros](https://pendle.finance), Pendle's on-chain funding rate swap market (Arbitrum). Treats implied APR across maturities as a proper rate curve, not a spot price; models inventory as DV01/duration exposure, not directional notional; replicates the protocol's margin and lazy-settlement mechanics off-chain to run risk in shadow before committing capital.
+Market making and relative-value system for [Boros](https://pendle.finance), Pendle's on-chain funding rate swap market (Arbitrum). Treats implied APR across maturities as a proper rate curve, not a spot price; models inventory as DV01/duration exposure, not directional notional; replicates the protocol's margin and lazy-settlement mechanics off-chain to run risk in shadow before committing capital.
 
 Not a wrapper around a REST client. This is a full quoting/risk/execution stack purpose-built for an IRS-style CLOB with protocol-specific settlement, margin, and liquidation mechanics that don't map cleanly onto spot or perp market making.
 
