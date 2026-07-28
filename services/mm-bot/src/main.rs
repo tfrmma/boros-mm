@@ -32,7 +32,7 @@ use rust_bridge::ExecutionClient;
 
 use config::MmBotConfig;
 use rest::BorosRestClient;
-use state::{AccountState, MarketRuntime};
+use state::{AccountState, MarketRuntime, OrderRateTracker};
 
 #[tokio::main]
 async fn main() {
@@ -115,7 +115,7 @@ async fn main() {
 
     let mut account = AccountState::default();
     let mut kill_switch = KillSwitch::new();
-    let recent_order_count: u32 = 0; // TODO: not decayed/windowed yet, always 0, pre_trade's throttle check is a no-op until this is wired to something real
+    let mut order_tracker = OrderRateTracker::default();
 
     let mut quote_interval = tokio::time::interval(cfg.quote_interval);
     let mut reconcile_interval = tokio::time::interval(cfg.reconcile_interval);
@@ -149,7 +149,7 @@ async fn main() {
                     &market_states,
                     &cfg.pre_trade_limits,
                     cfg.requote_threshold,
-                    recent_order_count,
+                    &mut order_tracker,
                     &mut execution,
                     kill_switch.is_tripped(),
                 ).await;
