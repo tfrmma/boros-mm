@@ -13,7 +13,7 @@ use risk_engine::{check_pre_trade, PreTradeLimits};
 use rust_bridge::ExecutionClient;
 use tick_math::{rate_to_tick, FixedX18, Rounding};
 
-use crate::state::{AccountState, MarketRuntime, RestingLeg, SignalCooldowns};
+use crate::state::{AccountState, MarketRuntime, OrderRateTracker, RestingLeg, SignalCooldowns};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SignalCycleError {
@@ -78,9 +78,10 @@ fn check_leg(
     account: &MarginAccount,
     market_states: &HashMap<MarketId, MarketState>,
     limits: &PreTradeLimits,
-    recent_order_count: u32,
+    order_tracker: &mut OrderRateTracker,
 ) -> bool {
     let hypothetical = MarginOpenOrder { market_id: MarketId(market_id), side: margin_side(side), size: FixedX18::from_f64(size), rate };
+    let recent_order_count = order_tracker.count_in_window(std::time::Duration::from_secs(limits.throttle_window_secs as u64));
     match check_pre_trade(margin_engine, account, hypothetical, market_states, limits, recent_order_count) {
         Ok(()) => true,
         Err(violations) => {
@@ -119,14 +120,34 @@ async fn place_leg(
     }
 }
 
+/// Cancels one already-placed leg's resting order, used to roll back a
+/// calendar spread when a later leg fails to place. This only cancels
+/// what's still resting on the book, an ALO leg that already filled
+/// before the rollback runs is a real position and this does not touch
+/// it, cancel_orders has nothing to cancel at that point. Best-effort,
+/// not a guarantee: if the cancel itself fails, the leg is logged and
+/// left for an operator, same as the rest of this module's failure mode.
+async fn cancel_leg(market_id: u32, runtimes: &mut HashMap<u32, MarketRuntime>, execution: &mut ExecutionClient, order_id: oms_core::OrderId) {
+    let market_acc = runtimes.get(&market_id).expect("market_id came from this map's own keys").config.market_acc.clone();
+    match execution.cancel_orders(market_acc, market_id, false, vec![order_id]).await {
+        Ok(_) => {
+            if let Some(runtime) = runtimes.get_mut(&market_id) {
+                runtime.resting_legs.retain(|leg| leg.order_id != order_id);
+            }
+        }
+        Err(e) => tracing::error!(market_id, ?order_id, "rollback cancel failed, leg may still be resting, needs manual review: {e}"),
+    }
+}
+
 /// Calendar spread scan: fit the zone's curve, find butterfly deviations,
 /// and (cooldown + pre-trade permitting) enter all three legs. All-or-
 /// nothing on the pre-trade check (checked sequentially before placing
-/// anything), but NOT atomic on placement itself, if leg 2's `place_order`
-/// call fails after leg 1 already went through, this leaves a real,
-/// partial, unbalanced position sitting on-chain. Logged loudly when it
-/// happens, not silently absorbed, but not automatically unwound either,
-/// that's real scope this pass doesn't cover.
+/// anything). Placement itself still isn't atomic, these are three
+/// separate transactions, but a failed leg now triggers a best-effort
+/// rollback (`cancel_leg`) of whichever legs did place instead of just
+/// logging and leaving them resting. That only covers legs still on the
+/// book: an ALO leg that fills before the rollback runs is a real
+/// position this doesn't unwind.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_calendar_scan(
     runtimes: &mut HashMap<u32, MarketRuntime>,
@@ -138,7 +159,7 @@ pub async fn run_calendar_scan(
     account: &AccountState,
     market_states: &HashMap<MarketId, MarketState>,
     limits: &PreTradeLimits,
-    recent_order_count: u32,
+    order_tracker: &mut OrderRateTracker,
     execution: &mut ExecutionClient,
     kill_switch_tripped: bool,
 ) {
@@ -176,9 +197,9 @@ pub async fn run_calendar_scan(
         let base_size = runtimes.get(&mid_id).expect("looked up above").config.base_size;
 
         let margin_account = build_margin_account(account, token_id, runtimes);
-        let mid_ok = check_leg(mid_id, trade.mid_side, base_size, mid_rate, &margin_engine, &margin_account, market_states, limits, recent_order_count);
-        let left_ok = mid_ok && check_leg(left_id, trade.wing_side, base_size, left_rate, &margin_engine, &margin_account, market_states, limits, recent_order_count);
-        let right_ok = left_ok && check_leg(right_id, trade.wing_side, base_size, right_rate, &margin_engine, &margin_account, market_states, limits, recent_order_count);
+        let mid_ok = check_leg(mid_id, trade.mid_side, base_size, mid_rate, &margin_engine, &margin_account, market_states, limits, order_tracker);
+        let left_ok = mid_ok && check_leg(left_id, trade.wing_side, base_size, left_rate, &margin_engine, &margin_account, market_states, limits, order_tracker);
+        let right_ok = left_ok && check_leg(right_id, trade.wing_side, base_size, right_rate, &margin_engine, &margin_account, market_states, limits, order_tracker);
 
         if !(mid_ok && left_ok && right_ok) {
             tracing::info!(?key, deviation = trade.signal.deviation, "calendar spread signal detected but blocked by pre-trade checks, skipping");
@@ -188,14 +209,36 @@ pub async fn run_calendar_scan(
         tracing::info!(?key, deviation = trade.signal.deviation, mid_id, left_id, right_id, "calendar spread signal, entering all three legs");
         cooldowns.mark_calendar(key);
 
-        let results = [
-            place_leg(mid_id, runtimes, execution, trade.mid_side, mid_rate).await,
-            place_leg(left_id, runtimes, execution, trade.wing_side, left_rate).await,
-            place_leg(right_id, runtimes, execution, trade.wing_side, right_rate).await,
-        ];
-        for (leg_name, result) in [("mid", &results[0]), ("left", &results[1]), ("right", &results[2])] {
-            if let Err(e) = result {
-                tracing::error!(?key, leg_name, "leg placement failed, position may now be partial/unbalanced: {e}");
+        let legs = [(mid_id, "mid"), (left_id, "left"), (right_id, "right")];
+        let rates = [mid_rate, left_rate, right_rate];
+        let sides = [trade.mid_side, trade.wing_side, trade.wing_side];
+
+        let mut placed: Vec<(u32, oms_core::OrderId)> = Vec::new();
+        let mut any_failed = false;
+
+        for i in 0..3 {
+            let (market_id, leg_name) = legs[i];
+            match place_leg(market_id, runtimes, execution, sides[i], rates[i]).await {
+                Ok(true) => {
+                    order_tracker.record_placement();
+                    let order_id = runtimes.get(&market_id).expect("just placed above").resting_legs.last().expect("just pushed above").order_id;
+                    placed.push((market_id, order_id));
+                }
+                Ok(false) => {
+                    any_failed = true;
+                    tracing::warn!(?key, leg_name, market_id, "leg placement returned no order_id, ALO likely rejected as crossing");
+                }
+                Err(e) => {
+                    any_failed = true;
+                    tracing::error!(?key, leg_name, market_id, "leg placement failed: {e}");
+                }
+            }
+        }
+
+        if any_failed && !placed.is_empty() {
+            tracing::warn!(?key, legs_to_roll_back = placed.len(), "calendar spread partially entered, rolling back the legs that did place");
+            for (market_id, order_id) in placed {
+                cancel_leg(market_id, runtimes, execution, order_id).await;
             }
         }
     }
@@ -217,7 +260,7 @@ pub async fn run_cross_venue_scan(
     account: &AccountState,
     market_states: &HashMap<MarketId, MarketState>,
     limits: &PreTradeLimits,
-    recent_order_count: u32,
+    order_tracker: &mut OrderRateTracker,
     execution: &mut ExecutionClient,
     kill_switch_tripped: bool,
 ) {
@@ -248,7 +291,7 @@ pub async fn run_cross_venue_scan(
         let Some(signal) = detect_cross_venue_signal(&obs, cex_ref.min_abs_basis) else { continue };
 
         let margin_account = build_margin_account(account, token_id, runtimes);
-        if !check_leg(market_id, signal.boros_side, base_size, mark_rate, &margin_engine, &margin_account, market_states, limits, recent_order_count) {
+        if !check_leg(market_id, signal.boros_side, base_size, mark_rate, &margin_engine, &margin_account, market_states, limits, order_tracker) {
             tracing::info!(market_id, basis = signal.basis, "cross-venue signal detected but blocked by pre-trade check, skipping");
             continue;
         }
@@ -256,8 +299,10 @@ pub async fn run_cross_venue_scan(
         tracing::info!(market_id, basis = signal.basis, ?signal.boros_side, "cross-venue signal, entering Boros leg (CEX hedge is NOT placed by this bot)");
         cooldowns.mark_cross_venue(market_id);
 
-        if let Err(e) = place_leg(market_id, runtimes, execution, signal.boros_side, mark_rate).await {
-            tracing::error!(market_id, "cross-venue leg placement failed: {e}");
+        match place_leg(market_id, runtimes, execution, signal.boros_side, mark_rate).await {
+            Ok(true) => order_tracker.record_placement(),
+            Ok(false) => tracing::warn!(market_id, "cross-venue leg placement returned no order_id, ALO likely rejected as crossing"),
+            Err(e) => tracing::error!(market_id, "cross-venue leg placement failed: {e}"),
         }
     }
 }
