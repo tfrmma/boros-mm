@@ -11,7 +11,7 @@ use risk_engine::{check_pre_trade, position_dv01, PreTradeLimits};
 use rust_bridge::ExecutionClient;
 use tick_math::{rate_to_tick, FixedX18, Rounding};
 
-use crate::state::{AccountState, MarketRuntime};
+use crate::state::{AccountState, MarketRuntime, OrderRateTracker};
 
 #[derive(Debug, thiserror::Error)]
 pub enum QuoteCycleError {
@@ -96,7 +96,7 @@ pub async fn run_cycle(
     market_states: &HashMap<MarketId, MarketState>,
     limits: &PreTradeLimits,
     requote_threshold: f64,
-    recent_order_count: u32,
+    order_tracker: &mut OrderRateTracker,
     execution: &mut ExecutionClient,
     kill_switch_tripped: bool,
 ) {
@@ -107,7 +107,7 @@ pub async fn run_cycle(
     for market_id in market_ids {
         let result = run_market_cycle(
             market_id, runtimes, curve.as_ref(), token_id, account, margin_engine, market_states,
-            limits, requote_threshold, recent_order_count, execution, kill_switch_tripped,
+            limits, requote_threshold, order_tracker, execution, kill_switch_tripped,
         ).await;
         if let Err(e) = result {
             tracing::error!(market_id, "quote cycle failed for this market: {e}");
@@ -126,7 +126,7 @@ async fn run_market_cycle(
     market_states: &HashMap<MarketId, MarketState>,
     limits: &PreTradeLimits,
     requote_threshold: f64,
-    recent_order_count: u32,
+    order_tracker: &mut OrderRateTracker,
     execution: &mut ExecutionClient,
     kill_switch_tripped: bool,
 ) -> Result<(), QuoteCycleError> {
@@ -158,12 +158,17 @@ async fn run_market_cycle(
     // later `get_mut` calls that need this dropped first)
     let margin_account = build_margin_account(account, token_id, runtimes);
     let size = FixedX18::from_f64(base_size);
+    let throttle_window = std::time::Duration::from_secs(limits.throttle_window_secs as u64);
 
     if want_bid {
         let bid_tick = rate_to_tick(quote.bid_rate, tick_step, Rounding::Floor)?;
         let hypothetical = MarginOpenOrder { market_id: MarketId(market_id), side: MarginSide::Long, size, rate: quote.bid_rate };
+        let recent_order_count = order_tracker.count_in_window(throttle_window);
         match check_pre_trade(margin_engine, &margin_account, hypothetical, market_states, limits, recent_order_count) {
-            Ok(()) => requote_side(market_id, runtimes, execution, Side::Long, quote.bid_rate, bid_tick, base_size).await?,
+            Ok(()) => {
+                requote_side(market_id, runtimes, execution, Side::Long, quote.bid_rate, bid_tick, base_size).await?;
+                order_tracker.record_placement();
+            }
             Err(violations) => tracing::warn!(market_id, ?violations, "bid requote blocked by pre-trade check"),
         }
     }
@@ -171,8 +176,12 @@ async fn run_market_cycle(
     if want_ask {
         let ask_tick = rate_to_tick(quote.ask_rate, tick_step, Rounding::Ceil)?;
         let hypothetical = MarginOpenOrder { market_id: MarketId(market_id), side: MarginSide::Short, size, rate: quote.ask_rate };
+        let recent_order_count = order_tracker.count_in_window(throttle_window);
         match check_pre_trade(margin_engine, &margin_account, hypothetical, market_states, limits, recent_order_count) {
-            Ok(()) => requote_side(market_id, runtimes, execution, Side::Short, quote.ask_rate, ask_tick, base_size).await?,
+            Ok(()) => {
+                requote_side(market_id, runtimes, execution, Side::Short, quote.ask_rate, ask_tick, base_size).await?;
+                order_tracker.record_placement();
+            }
             Err(violations) => tracing::warn!(market_id, ?violations, "ask requote blocked by pre-trade check"),
         }
     }
