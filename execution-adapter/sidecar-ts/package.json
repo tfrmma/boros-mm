@@ -1,0 +1,23 @@
+{
+  "name": "sidecar-ts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Thin gRPC wrapper over the official @pendle/sdk-boros SDK. Signs/encodes nothing itself.",
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsc --outDir dist-test src/config.ts src/errorMapping.ts src/errorMapping.test.ts src/service.ts src/service.test.ts --target ES2022 --module commonjs --moduleResolution node --esModuleInterop --skipLibCheck && node --test dist-test/errorMapping.test.js dist-test/service.test.js && rm -rf dist-test"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.10.9",
+    "@grpc/proto-loader": "^0.7.13",
+    "@pendle/sdk-boros": "1.5.0",
+    "viem": "2.44.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.4"
+  }
+}

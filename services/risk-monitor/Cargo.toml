@@ -1,0 +1,22 @@
+[package]
+name = "risk-monitor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "risk-monitor"
+path = "src/main.rs"
+
+[dependencies]
+tick-math  = { path = "../../crates/tick-math" }
+margin-sim = { path = "../../crates/margin-sim" }
+risk-engine = { path = "../../crates/risk-engine" }
+
+thiserror           = { workspace = true }
+serde               = { workspace = true }
+serde_json          = { workspace = true }
+tracing             = { workspace = true }
+tracing-subscriber  = { workspace = true }
+tokio               = { workspace = true }
+reqwest             = { workspace = true }

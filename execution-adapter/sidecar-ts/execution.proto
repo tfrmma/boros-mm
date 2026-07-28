@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+package boros.execution.v1;
+
+// Shared contract between rust-bridge (client, consumed by mm-bot/arb-bot)
+// and sidecar-ts (server, thin wrapper over @pendle/sdk-boros). sidecar-ts
+// never encodes calldata or signs anything itself — that's the official
+// SDK's job (Exchange/Agent classes, verified against the real published
+// package `@pendle/sdk-boros@1.5.0`). This service exists purely to expose
+// that SDK to Rust over gRPC.
+//
+// All FixedX18 monetary/rate values cross this boundary as decimal strings
+// (never a native numeric type) to avoid precision loss — same reasoning
+// tick-math's FixedX18 already applies to its own JSON serialization.
+// OrderId likewise crosses as a decimal string (it's a real on-chain u64;
+// JS's `number` can't represent the full range exactly, and even a JS
+// `bigint` doesn't survive JSON/protobuf's default numeric encoding safely).
+
+service ExecutionService {
+  // Mirrors Exchange.placeOrder (types/exchange/types.ts::PlaceOrderParams).
+  rpc PlaceOrder(PlaceOrderRequest) returns (PlaceOrderResponse);
+
+  // Mirrors Exchange.cancelOrders (types/exchange/types.ts::CancelOrdersParams).
+  rpc CancelOrders(CancelOrdersRequest) returns (CancelOrdersResponse);
+
+  // Mirrors the SendTxsBot trace endpoints (BorosSendTxsBotSDK.d.ts:
+  // agentControllerTrace / dedicatedAgentControllerTrace) — poll-based
+  // status for an already-submitted tx, keyed by (agent, nonce).
+  rpc GetTxStatus(GetTxStatusRequest) returns (GetTxStatusResponse);
+}
+
+enum Side {
+  SIDE_UNSPECIFIED = 0;
+  SIDE_LONG = 1;
+  SIDE_SHORT = 2;
+}
+
+// Mirrors the real on-chain TimeInForce (Order.sol: GTC/IOC/FOK/ALO/SOFT_ALO)
+// — proto3 enums can't start their meaningful values at 0 (0 is reserved for
+// "unspecified"/default), so these are shifted by one from both the
+// contract's own values and the SDK's GOOD_TIL_CANCELLED=0..SOFT_ADD_LIQUIDITY_ONLY=4.
+enum TimeInForce {
+  TIME_IN_FORCE_UNSPECIFIED = 0;
+  GTC = 1;
+  IOC = 2;
+  FOK = 3;
+  ALO = 4;
+  SOFT_ALO = 5;
+}
+
+// Mirrors BorosSendTxsBotSDK's AgentTraceResponse.submissionStatus/nonceStatus.
+enum TxStatus {
+  TX_STATUS_UNSPECIFIED = 0;
+  HAVENT_SEEN = 1;
+  PROCESSING = 2;
+  PROCESSED = 3;
+  SEND_FAILED = 4;
+}
+
+message PlaceOrderRequest {
+  string market_acc = 1;       // hex MarketAcc, as the SDK's PlaceOrderParams.marketAcc
+  uint32 market_id = 2;
+  Side side = 3;
+  string size = 4;             // FixedX18, decimal string
+  optional int32 limit_tick = 5;
+  optional double slippage = 6;
+  TimeInForce tif = 7;
+}
+
+message PlaceOrderResponse {
+  string tx_hash = 1;
+  optional string order_id = 2;    // decimal u64 string; absent if fully IOC/FOK-filled with no resting order
+  string filled_size = 3;          // FixedX18, decimal string
+  optional string placed_size = 4; // FixedX18, decimal string
+  TxStatus status = 5;
+}
+
+message CancelOrdersRequest {
+  string market_acc = 1;
+  uint32 market_id = 2;
+  bool cancel_all = 3;
+  repeated string order_ids = 4;   // decimal u64 strings, ignored if cancel_all
+}
+
+message CancelOrdersResponse {
+  string tx_hash = 1;
+  TxStatus status = 2;
+}
+
+message GetTxStatusRequest {
+  string agent = 1;
+  string nonce = 2;
+}
+
+message GetTxStatusResponse {
+  TxStatus submission_status = 1;
+  TxStatus nonce_status = 2;
+  optional string tx_hash = 3;
+}
