@@ -1,0 +1,21 @@
+[package]
+name = "feed-ingest"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tick-math = { path = "../tick-math" }
+
+thiserror         = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+tracing           = { workspace = true }
+tokio             = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util      = { workspace = true }
+async-trait       = { workspace = true }
+
+# Boros speaks Socket.IO, not raw WS — see src/boros/mod.rs for why this is
+# here instead of extending ws/connection.rs's tokio-tungstenite loop.
+rust_socketio = { version = "0.6", features = ["async"] }

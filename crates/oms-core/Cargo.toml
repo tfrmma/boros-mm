@@ -1,0 +1,10 @@
+[package]
+name = "oms-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tick-math          = { path = "../tick-math" }
+settlement-ledger   = { path = "../settlement-ledger" }
+thiserror           = { workspace = true }

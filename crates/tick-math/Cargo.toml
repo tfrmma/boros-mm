@@ -1,0 +1,16 @@
+[package]
+name = "tick-math"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+serde = ["dep:serde"]
+
+[dependencies]
+thiserror = { workspace = true }
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+serde = { workspace = true }
