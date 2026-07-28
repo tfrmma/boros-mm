@@ -65,6 +65,36 @@ impl SignalCooldowns {
     }
 }
 
+/// Sliding-window count of orders this bot has placed, backing
+/// `check_pre_trade`'s throttle limit. A `VecDeque` of placement
+/// timestamps, pruned lazily on read instead of on a timer, nothing
+/// polls this while the bot is otherwise idle.
+#[derive(Default)]
+pub struct OrderRateTracker {
+    placements: std::collections::VecDeque<Instant>,
+}
+
+impl OrderRateTracker {
+    pub fn record_placement(&mut self) {
+        self.placements.push_back(Instant::now());
+    }
+
+    /// Drops anything at or past `window` old, returns how many remain.
+    /// Uses `>=` (not `>`) so a zero-length window prunes immediately,
+    /// same convention as `SignalCooldowns`.
+    pub fn count_in_window(&mut self, window: std::time::Duration) -> u32 {
+        let now = Instant::now();
+        while let Some(&oldest) = self.placements.front() {
+            if now.duration_since(oldest) >= window {
+                self.placements.pop_front();
+            } else {
+                break;
+            }
+        }
+        self.placements.len() as u32
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct AccountState {
     pub cash: FixedX18,
@@ -142,5 +172,36 @@ mod tests {
         let mut account = AccountState::default();
         account.positions.insert(7, FixedX18::from_f64(12.5));
         assert_eq!(account.position(7), FixedX18::from_f64(12.5));
+    }
+
+    #[test]
+    fn order_rate_tracker_zero_when_nothing_recorded() {
+        let mut tracker = OrderRateTracker::default();
+        assert_eq!(tracker.count_in_window(std::time::Duration::from_secs(60)), 0);
+    }
+
+    #[test]
+    fn order_rate_tracker_counts_placements_within_a_real_window() {
+        let mut tracker = OrderRateTracker::default();
+        tracker.record_placement();
+        tracker.record_placement();
+        assert_eq!(tracker.count_in_window(std::time::Duration::from_secs(60)), 2);
+    }
+
+    #[test]
+    fn order_rate_tracker_prunes_entries_at_or_past_the_window_edge() {
+        let mut tracker = OrderRateTracker::default();
+        tracker.record_placement();
+        // zero-length window: any elapsed time is >= 0, so this entry is already stale
+        assert_eq!(tracker.count_in_window(std::time::Duration::from_secs(0)), 0);
+    }
+
+    #[test]
+    fn order_rate_tracker_pruning_is_one_directional() {
+        // once pruned, a placement doesn't come back on a later, wider window check
+        let mut tracker = OrderRateTracker::default();
+        tracker.record_placement();
+        assert_eq!(tracker.count_in_window(std::time::Duration::from_secs(0)), 0);
+        assert_eq!(tracker.count_in_window(std::time::Duration::from_secs(3600)), 0);
     }
 }
