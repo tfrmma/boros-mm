@@ -17,6 +17,23 @@ pub struct RestingLeg {
     pub rate: FixedX18,
 }
 
+/// A calendar spread this bot entered and is still tracking for reversal.
+/// `signal_cycle::run_calendar_scan` closes it (opposite-side IOC on each
+/// leg) once the same maturity triple's deviation either drops back below
+/// threshold or flips sign relative to `entry_deviation_positive`.
+#[derive(Debug, Clone)]
+pub struct ActiveCalendarSpread {
+    pub legs: Vec<(u32, Side)>,
+    pub entry_deviation_positive: bool,
+}
+
+/// Same idea as `ActiveCalendarSpread`, for a single cross-venue leg.
+#[derive(Debug, Clone, Copy)]
+pub struct ActiveCrossVenue {
+    pub side: Side,
+    pub entry_basis_positive: bool,
+}
+
 pub struct MarketRuntime {
     pub config: MarketConfig,
     pub margin_config: MarginConfig,
