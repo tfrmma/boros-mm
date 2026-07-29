@@ -46,10 +46,10 @@ export class ExecutionServiceImpl {
   }
 
   /**
-   * `agentPrivateKey` comes from wherever the deployment's secret manager
-   * puts it (env var here for local dev only, a real deployment should
-   * inject this from a KMS/secrets manager, never a plain env var in
-   * production). The root wallet's private key is NOT a
+   * `agentPrivateKey` is already resolved by the time it gets here, see
+   * `secrets.ts`'s `SecretProvider`, this constructor doesn't care whether
+   * it came from an env var (local dev) or AWS Secrets Manager
+   * (production). The root wallet's private key is NOT a
    * parameter here at all: per this workspace's key-separation design, the
    * root wallet only ever signs the one-time agent approval, offline,
    * outside this process entirely. This sidecar only ever holds the agent
