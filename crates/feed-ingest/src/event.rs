@@ -1,11 +1,11 @@
 //! Wire types for the Boros WebSocket feed and for external funding sources.
 //!
-//! Boros side verified against docs.pendle.finance/boros-dev/Backend/websocket
-//! (fetched 2026-07-17) and .../Backend/glossary for the Side enum. Field docs
-//! below cite which table each struct came from. Where the doc only lists field
-//! names in prose (no explicit types table), it's noted, those are typed on
-//! best judgement, not copied from a spec, and should be checked against a real
-//! payload capture before anything trades off them.
+//! Boros side verified against docs.pendle.finance/boros-dev/Backend/websocket,
+//! re-fetched and re-checked field by field, no drift found in any struct
+//! below since the previous pass. Where the doc only lists field names in
+//! prose (no explicit types table), it's noted, those are typed on best
+//! judgement and should still be checked against a real payload capture
+//! before anything trades off them.
 //!
 //! Binance/Bybit/Hyperliquid types are unrelated to Boros and just mirror what
 //! funding/binance.rs, funding/bybit.rs, funding/hyperliquid.rs already build.
@@ -216,16 +216,16 @@ pub struct BookEvent {
 
 // ── market trade (Market Channels table row: fields listed in prose only) ──
 
-/// Payload of `market-trade:MARKET_ID:update`. Field set (not types) cross-
-/// verified 2026-07-19 against `@pendle/sdk-boros@1.5.0`'s
-/// `MarketTradeResponse` REST type (`backend/secrettune/BorosCoreSDK.d.ts`):
-/// `{ size, rate, txHash, blockTimestamp }`, exact same 4 fields, nothing
-/// more, nothing less. That's still a REST type though, not the WS payload
-/// itself, and REST types `rate`/`size` as plain `number`, not a FixedX18
-/// raw string. Genuinely don't know if the WS wire format matches REST here
-/// or keeps the FixedX18-raw-string convention the orderbook uses, so
-/// `rate`/`size` accept either shape on the wire and normalize to a decimal
-/// string, instead of betting on one and breaking on the other.
+/// Payload of `market-trade:MARKET_ID:update`. The WS doc's own channel
+/// description confirms the field set directly now (`rate`, `size`,
+/// `blockTimestamp`, `txHash`), not just by analogy with the SDK's REST
+/// `MarketTradeResponse` type as before. What's still not nailed down:
+/// whether `rate`/`size` are FixedX18-raw strings on this channel
+/// specifically, the doc's FixedX18-raw callout lists orderbook/position/
+/// settlement fields by name but doesn't name market-trade in that list.
+/// `rate`/`size` accept either a JSON string or number on the wire and
+/// normalize to a decimal string, instead of betting on one and breaking
+/// on the other.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MarketTradeUpdate {
     #[serde(deserialize_with = "de_numeric_string")]
@@ -426,6 +426,17 @@ pub struct MarketStatisticsEvent {
 /// instead of three separate ones: a consumer reconciling account state
 /// generally wants all three interleaved in arrival order, not three
 /// streams to merge itself.
+///
+/// `settlement-update` has limited availability: as of this check, Boros
+/// only emits it for a handful of allowlisted market makers, not for every
+/// user. A caller that isn't on that list will never see this variant,
+/// silently, there's no error or rejection, the event just never arrives.
+/// `GET /accounts/settlements` (REST) or the legacy `account:ACCOUNT`
+/// channel are the fallback for everyone else, not implemented by this
+/// crate yet. `settlement-ledger`'s FIndex-driven local settlement doesn't
+/// depend on this event either way, it derives everything from fills plus
+/// `record_findex`, this is only relevant to anything that expects a push
+/// notification the moment a settlement posts.
 #[derive(Debug, Clone)]
 pub enum AccountUpdateEvent {
     Position(PositionUpdate),
