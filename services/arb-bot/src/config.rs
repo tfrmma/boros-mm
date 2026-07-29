@@ -75,6 +75,11 @@ pub struct ArbBotConfig {
     pub signal_cooldown: Duration,
     pub pre_trade_limits: PreTradeLimits,
     pub conservative_health_ratio: f64,
+    /// Slippage tolerance for the IOC order used to unwind a reversed
+    /// signal. Real cost of taking liquidity now instead of resting an
+    /// ALO, the right number depends on the market's typical depth, not
+    /// something this bot should guess.
+    pub unwind_ioc_slippage: f64,
     pub retry: rust_bridge::RetryConfig,
     pub ws_url: String,
     pub ws_namespace: String,
@@ -101,6 +106,7 @@ impl ArbBotConfig {
                 throttle_window_secs: optional_u64("ARB_BOT_THROTTLE_WINDOW_SECS", 60) as u32,
             },
             conservative_health_ratio: optional_f64("ARB_BOT_CONSERVATIVE_HEALTH_RATIO", 1.15),
+            unwind_ioc_slippage: optional_f64("ARB_BOT_UNWIND_IOC_SLIPPAGE", 0.002),
             retry: rust_bridge::RetryConfig {
                 max_attempts: optional_u64("ARB_BOT_EXEC_MAX_ATTEMPTS", 3) as u32,
                 initial_backoff: Duration::from_millis(optional_u64("ARB_BOT_EXEC_INITIAL_BACKOFF_MS", 100)),
