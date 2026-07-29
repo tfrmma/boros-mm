@@ -1,18 +1,22 @@
-//! Error classification against the real error taxonomy published in
-//! `@pendle/sdk-boros@1.5.0`'s `dist/errors/ErrorCodes.d.ts` (downloaded
-//! from the npm registry and read directly). The source GitHub repo,
-//! `pendle-finance/sdk-boros-public`, returns 404 from this environment
-//! (not 401 as an earlier version of this comment said, never checked the
-//! exact status code before writing that down, corrected 2026-07-18),
-//! either way this is verified against the compiled package, not the repo.
+//! Error classification against the error taxonomy published in
+//! `@pendle/sdk-boros`'s `dist/errors/ErrorCodes.d.ts` (downloaded from the
+//! npm registry and read directly, currently checked against 1.6.3, up
+//! from 1.5.0). The source GitHub repo, `pendle-finance/sdk-boros-public`,
+//! returns 404 from this environment, this is verified against the
+//! compiled package, not the repo.
 //!
-//! That taxonomy has 219 distinct codes across two families: API-level
+//! The taxonomy has 226 distinct codes across two families: API-level
 //! validation (`ApiErrorCodes`) and decoded Solidity custom errors
-//! (`ErrorCodes`). 2026-07-18: went through the full list against
-//! `ErrorCodes.d.ts` (not just the ~105 that were here before) and
-//! classified everything with a clear, named failure mode. What's left in
-//! neither list is genuinely ambiguous from the name alone, not just
-//! unreviewed:
+//! (`ErrorCodes`). Cross-checked the on-chain half directly against
+//! `contracts/lib/Errors.sol` in `pendle-finance/boros-core-public`: three
+//! were in that source but missing here (`OTCInvalidAgent`,
+//! `OTCMessageExpired`, `OTCRequestExecuted`), added as `Fatal` following
+//! the same pattern as the `AuthModule`/`ConditionalModule` codes right
+//! above them. The 1.6.x bump also added a `P2P_*` subsystem (8 new
+//! codes) not present at 1.5.0, classified below by name.
+//!
+//! What's left unclassified is genuinely ambiguous from the name alone,
+//! not just unreviewed:
 //!
 //! - `DATA_INCONSISTENCY`, `HTTP_EXCEPTION`, `FailedCall`, `InvalidLength`,
 //!   too generic to tell whether a resend would help
@@ -52,6 +56,9 @@ const RETRIABLE_CODES: &[&str] = &[
     "DATABASE_ERROR",
     // same shape as EXTERNAL_SERVICE_ERROR, just scoped to one data source
     "HISTORICAL_PRICE_FETCH_FAILED",
+    // name says it outright: an optimistic-concurrency conflict on a P2P
+    // offer row, the request itself wasn't wrong, resend it
+    "P2P_CONFLICT_RETRY",
 ];
 
 /// Business-logic / validation rejections, confident retrying the exact
@@ -163,6 +170,9 @@ const FATAL_CODES: &[&str] = &[
     "OTC_TRADE_NOT_FOUND", "OTC_TRADE_INVALID_STATUS", "OTC_TRADE_EXPIRED",
     "OTC_TRADE_DUPLICATE", "OTC_TRADE_INVALID_REQUEST",
     "OTC_TRADE_UNAUTHORIZED", "OTC_USER_NOT_ELIGIBLE",
+    // OTCModule, same fatal pattern as the AuthModule/ConditionalModule
+    // codes above (invalid agent, expired message, already-executed intent)
+    "OTCInvalidAgent", "OTCMessageExpired", "OTCRequestExecuted",
     "InsufficientProfit",
     // referrals / VIP / whitelist eligibility
     "REFERRAL_CODE_EXISTS", "REFERRAL_CODE_NOT_FOUND",
@@ -172,6 +182,12 @@ const FATAL_CODES: &[&str] = &[
     // fee/gas validation, "identical resend" won't clear this, the caller
     // needs to raise the fee, that's a different request
     "MAX_FEE_TOO_LOW",
+    // P2P offer subsystem, added in SDK 1.6.x: not-found/expired/invalid
+    // patterns match the same-shaped codes above, P2P_CONFLICT_RETRY is
+    // the one code in this group that's actually retriable, see above
+    "P2P_NOT_FOUND", "P2P_ROW_DELETED", "P2P_INVALID_STATE",
+    "P2P_OFFER_EXPIRED", "P2P_SIZE_OUT_OF_BOUNDS",
+    "P2P_INSUFFICIENT_MARGIN", "P2P_INVALID_SIGNATURE",
 ];
 
 /// Classify a raw error code from the Boros API/backend. `code` should be
