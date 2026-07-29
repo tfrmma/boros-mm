@@ -22,6 +22,23 @@ test('axios-shaped error (response.data.code) is extracted', () => {
   assert.match(grpcErr.message, /^MARKET_NOT_FOUND: /);
 });
 
+test('the real Open API error shape (response.data.errorCode) is extracted', () => {
+  // shape confirmed against docs.pendle.finance/boros-dev/Backend/api's
+  // Error Handling section: { errorCode, message, data }. The docs'
+  // own example code, INVALID_MARKET_ID, isn't actually a member of
+  // ApiErrorCodes though, just an illustrative name, so this uses a real
+  // one (MARKET_NOT_FOUND) to test the field-name extraction honestly.
+  const openApiErr = { response: { data: { errorCode: 'MARKET_NOT_FOUND', message: 'Market with ID 999 not found', data: {} } } };
+  const grpcErr = toGrpcError(openApiErr);
+  assert.match(grpcErr.message, /^MARKET_NOT_FOUND: /);
+});
+
+test('the Send Txs Bot legacy error shape (statusCode, no code field) falls back to UNKNOWN', () => {
+  const sendTxsBotErr = { response: { data: { statusCode: 400, message: 'Invalid signature' } } };
+  const grpcErr = toGrpcError(sendTxsBotErr);
+  assert.match(grpcErr.message, /^UNKNOWN: /);
+});
+
 test('unrecognized error shape falls back to UNKNOWN, not a guess', () => {
   const mysteryErr = new Error('something broke');
   const grpcErr = toGrpcError(mysteryErr);
