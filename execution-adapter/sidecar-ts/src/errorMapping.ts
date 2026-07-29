@@ -4,42 +4,43 @@ import { ApiErrorCodes, PendleContractError, ViemErrorDecoder } from '@pendle/sd
 /**
  * Maps an error thrown by the SDK into a gRPC `Status` whose `message` is
  * `"<code>: <message>"`, `rust-bridge::client::extract_code` parses that
- * exact convention back apart. A deliberate simplification instead of the
- * full `google.rpc.ErrorInfo` status-details pattern (see execution.proto's
+ * exact convention back apart. A simplification instead of the full
+ * `google.rpc.ErrorInfo` status-details pattern (see execution.proto's
  * module doc), revisit if this ever needs structured metadata beyond a
  * code + message.
  *
- * Two genuinely different error shapes exist here, with very different
- * confidence levels:
+ * Two genuinely different error shapes exist here:
  *
- * 1. **Contract-level errors** (`PendleContractError`), VERIFIED against
- *    the SDK's own exported class: `.errorName` is exactly one of the
- *    decoded Solidity custom error names (`MMHealthCritical`,
- *    `MarketOICapExceeded`, etc.), read directly from
- *    `errors/PendleContractError/type.d.ts`.
+ * 1. **Contract-level errors** (`PendleContractError`): `.errorName` is
+ *    exactly one of the decoded Solidity custom error names
+ *    (`MMHealthCritical`, `MarketOICapExceeded`, etc.), read directly from
+ *    the SDK's own `errors/PendleContractError/type.d.ts`.
  *
  * 2. **API/REST-level errors** (the `ApiErrorCodes` family,
- *    `INSUFFICIENT_MARGIN`, `MARKET_NOT_FOUND`, etc.). The set of valid
- *    codes IS verified (`ApiErrorCodes` is a real export, confirmed
- *    2026-07-18 via `dist/errors/ErrorCodes.d.ts` in the compiled
- *    package). What's still not fully confirmed is the exact shape of the
- *    thrown error object for this specific family. Partial evidence found
- *    2026-07-19: the SDK does use `axios` as its HTTP client (confirmed
- *    via `import { AxiosError } from 'axios'` in
- *    `AggregatorHelperErrors.d.ts`, a different subsystem but the same
- *    package), which supports the general `err.response.data.X` shape
- *    already assumed here. What's NOT confirmed: the exact field name
- *    Boros's trading API puts the code under (`code`? `errorCode`?
- *    something else?), none of the `.d.ts` files or the compiled JS
- *    expose a consuming site for `ApiErrorCodes` that would show it.
- *    `extractApiErrorCode` below tries the shapes a REST client thrown
- *    error would plausibly have (`err.code`, `err.response.data.code`),
- *    then checks the result against the real `ApiErrorCodes` set before
+ *    `INSUFFICIENT_MARGIN`, `MARKET_NOT_FOUND`, etc.). The SDK itself
+ *    doesn't wrap these, it uses a plain `axios` instance with no custom
+ *    error class, so a rejected request throws a raw `AxiosError` and the
+ *    response body is exactly whatever the Open API returns. That body
+ *    shape is documented directly (`docs.pendle.finance/boros-dev/Backend/api`,
+ *    "Error Handling" section):
+ *    ```json
+ *    { "errorCode": "INVALID_MARKET_ID", "message": "Market with ID 999 not found", "data": {} }
+ *    ```
+ *    (that exact code, `INVALID_MARKET_ID`, is the doc's own illustrative
+ *    example and isn't actually a member of `ApiErrorCodes`, the field
+ *    name (`errorCode`) is what's confirmed here, not that specific value)
+ *    so the field is `errorCode`, at `err.response.data.errorCode`, not
+ *    `err.code` or `err.response.data.code` as previously guessed. The
+ *    Send Txs Bot service uses a different, legacy shape instead
+ *    (`{ statusCode, message }`, no code field at all), so an error from
+ *    that service correctly falls through to `UNKNOWN` here, there's
+ *    nothing to extract. `extractApiErrorCode` checks `errorCode` first,
+ *    keeps the two older guesses as fallback candidates in case a
+ *    different endpoint or SDK version still uses them, and validates
+ *    whatever it finds against the real `ApiErrorCodes` set before
  *    trusting it, so a wrong guess fails closed to `UNKNOWN` instead of
  *    misreading an unrelated error (a Node system error like
- *    `ECONNREFUSED`, for instance). If real traffic shows the field name
- *    itself is wrong, fix it against an actual observed error, not by
- *    guessing harder.
+ *    `ECONNREFUSED`, for instance).
  */
 export function toGrpcError(err: unknown): grpc.ServiceError {
   const decoded = err instanceof Error ? ViemErrorDecoder.decodeViemError(err) : err;
@@ -62,10 +63,11 @@ function extractApiErrorCode(err: unknown): string | undefined {
   if (typeof err !== 'object' || err === null) return undefined;
   const e = err as Record<string, unknown>;
 
-  const candidates: unknown[] = [e.code];
   const response = e.response as Record<string, unknown> | undefined;
   const data = response?.data as Record<string, unknown> | undefined;
-  candidates.push(data?.code);
+  // errorCode first: confirmed real field name for the Open API's error
+  // body. code/data.code kept as fallbacks only, not confirmed anywhere.
+  const candidates: unknown[] = [data?.errorCode, e.code, data?.code];
 
   for (const candidate of candidates) {
     if (typeof candidate === 'string' && KNOWN_API_ERROR_CODES.has(candidate)) {
