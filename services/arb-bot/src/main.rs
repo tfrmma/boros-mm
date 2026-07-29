@@ -9,11 +9,14 @@
 //! module doc, not repeated here).
 //!
 //! Known scope cuts, not oversights:
-//! - No automatic unwind on signal reversal. A signal that reverses, or a
-//!   kill switch trip, leaves existing legs resting/filled, doesn't close
-//!   them. Closing a calendar spread or a cross-venue position is a real
-//!   decision (has the basis actually mean-reverted, or moved further
-//!   against you) left to the operator.
+//! - A signal reversal (deviation reverts below threshold, or flips sign)
+//!   now triggers an automatic unwind: an opposite-side IOC order on each
+//!   leg of the tracked position, see `signal_cycle.rs`'s scan functions
+//!   for exactly how "active" is tracked and when unwind fires. A kill
+//!   switch trip does not trigger this, new entries stop but existing
+//!   legs are left as-is, deciding whether a halted book should also
+//!   unwind is a risk-policy call for the operator, not something this
+//!   bot assumes.
 //! - Calendar spread leg placement isn't atomic (three separate
 //!   transactions can't be), but a failed leg now rolls back whichever
 //!   legs did place via `cancel_leg`, see `signal_cycle.rs`'s module doc
@@ -40,7 +43,7 @@ use rust_bridge::ExecutionClient;
 
 use config::ArbBotConfig;
 use rest::BorosRestClient;
-use state::{AccountState, MarketRuntime, OrderRateTracker, SignalCooldowns};
+use state::{AccountState, ActiveCalendarSpread, ActiveCrossVenue, MarketRuntime, OrderRateTracker, SignalCooldowns};
 
 #[tokio::main]
 async fn main() {
@@ -142,6 +145,8 @@ async fn main() {
     let mut cooldowns = SignalCooldowns::default();
     let mut funding_rates: HashMap<(Venue, String), f64> = HashMap::new();
     let mut order_tracker = OrderRateTracker::default();
+    let mut active_spreads: HashMap<(u32, u32, u32), ActiveCalendarSpread> = HashMap::new();
+    let mut active_cross_venue: HashMap<u32, ActiveCrossVenue> = HashMap::new();
 
     let mut scan_interval = tokio::time::interval(cfg.scan_interval);
     let mut reconcile_interval = tokio::time::interval(cfg.reconcile_interval);
@@ -164,12 +169,14 @@ async fn main() {
 
                 signal_cycle::run_calendar_scan(
                     &mut runtimes, &zone_name, min_abs_calendar_deviation, &mut cooldowns, cfg.signal_cooldown,
+                    &mut active_spreads, cfg.unwind_ioc_slippage,
                     cfg.token_id, &account, &market_states, &cfg.pre_trade_limits, &mut order_tracker,
                     &mut execution, kill_switch.is_tripped(),
                 ).await;
 
                 signal_cycle::run_cross_venue_scan(
                     &mut runtimes, &funding_rates, &mut cooldowns, cfg.signal_cooldown,
+                    &mut active_cross_venue, cfg.unwind_ioc_slippage,
                     cfg.token_id, &account, &market_states, &cfg.pre_trade_limits, &mut order_tracker,
                     &mut execution, kill_switch.is_tripped(),
                 ).await;
