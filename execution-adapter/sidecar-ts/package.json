@@ -8,9 +8,10 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "tsc --outDir dist-test src/config.ts src/errorMapping.ts src/errorMapping.test.ts src/service.ts src/service.test.ts --target ES2022 --module commonjs --moduleResolution node --esModuleInterop --skipLibCheck && node --test dist-test/errorMapping.test.js dist-test/service.test.js && rm -rf dist-test"
+    "test": "tsc --outDir dist-test src/config.ts src/errorMapping.ts src/errorMapping.test.ts src/secrets.ts src/secrets.test.ts src/service.ts src/service.test.ts --target ES2022 --module commonjs --moduleResolution node --esModuleInterop --skipLibCheck && node --test dist-test/errorMapping.test.js dist-test/secrets.test.js dist-test/service.test.js && rm -rf dist-test"
   },
   "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.1098.0",
     "@grpc/grpc-js": "^1.10.9",
     "@grpc/proto-loader": "^0.7.13",
     "@pendle/sdk-boros": "1.5.0",
