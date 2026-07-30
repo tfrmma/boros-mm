@@ -243,7 +243,7 @@ fn default_funding_ws_url(venue: Venue) -> String {
         Venue::Binance => "wss://fstream.binance.com/stream".to_owned(),
         Venue::Bybit => "wss://stream.bybit.com/v5/public/linear".to_owned(),
         Venue::Hyperliquid => "wss://api.hyperliquid.xyz/ws".to_owned(),
-        Venue::Okx => panic!("OKX funding feed not implemented yet (see feed-ingest's lib.rs), can't configure a CexReference against it"),
+        Venue::Okx => "wss://ws.okx.com:8443/ws/v5/public".to_owned(),
     }
 }
 
@@ -268,8 +268,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "OKX funding feed not implemented")]
-    fn default_funding_ws_url_okx_panics_not_implemented() {
-        default_funding_ws_url(Venue::Okx);
+    fn default_funding_ws_url_okx() {
+        assert_eq!(default_funding_ws_url(Venue::Okx), "wss://ws.okx.com:8443/ws/v5/public");
     }
 }
