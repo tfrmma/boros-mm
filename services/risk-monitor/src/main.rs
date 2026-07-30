@@ -118,17 +118,16 @@ async fn poll_once(
     let positions_resp = client.get_positions(&cfg.root_address, cfg.account_id).await?;
     let positions = shadow::parse_positions(&positions_resp)?;
 
-    // TODO: cash is fetched per-market-acc (needs the packed MarketAcc hex,
-    // not just root+accountId), not wired yet, defaulting to 0 means the
-    // shadow calc's total_value is undercounted by however much cash is
-    // actually posted. Tracked, not hidden: this makes the shadow number
-    // conservative (lower than real), which is the safe direction for a
-    // risk monitor to be wrong in, but it should still get fixed.
-    let cash = tick_math::FixedX18::ZERO;
+    let collateral = client.get_collateral_summary(&cfg.root_address, cfg.account_id, cfg.token_id).await?;
+    // net_balance is a human decimal string, same convention as every
+    // other numeric field in this REST API family, parsed the same way
+    // shadow.rs parses kIM/kMM. This sidesteps ever needing the packed
+    // MarketAcc hex: get_market_acc_cash (rest.rs) is the per-market-acc
+    // path that would need it, this account-wide summary doesn't.
+    let cash = shadow::parse_decimal_string("netBalance", &collateral.collateral.cross_position.net_balance)?;
 
     let shadow_ratio = shadow::compute_shadow_health_ratio(configs, market_states, &positions, cash, cfg.token_id)?;
 
-    let collateral = client.get_collateral_summary(&cfg.root_address, cfg.account_id, cfg.token_id).await?;
     let real_ratio = collateral.collateral.cross_position.margin_ratio;
 
     let alert = check_health_ratio_divergence(shadow_ratio, real_ratio, &cfg.divergence);
