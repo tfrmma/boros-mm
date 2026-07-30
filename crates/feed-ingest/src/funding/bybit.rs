@@ -1,8 +1,11 @@
 //! Bybit v5 Linear perpetuals funding rate via `tickers.{symbol}` WS stream.
 //!
-//! Bybit pushes fundingRate + nextFundingTime in the tickers snapshot/delta.
-//! Standard funding interval for USDT perps is 8h, verify per symbol if using
-//! anything exotic.
+//! Bybit pushes fundingRate + nextFundingTime + fundingIntervalHour in the
+//! tickers snapshot/delta, per the current published example
+//! (`bybit-exchange.github.io/docs/v5/websocket/public/ticker`). Read
+//! directly, not assumed uniform: some Bybit markets settle every 4h or 1h
+//! instead of the common 8h. 8h is only the fallback for a delta message
+//! that updates the rate without repeating the interval field.
 //!
 //! WS endpoint: wss://stream.bybit.com/v5/public/linear
 
@@ -100,6 +103,14 @@ fn dispatch(text: &str, tx: &broadcast::Sender<FundingRateEvent>) {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
 
+    // real per-symbol field now (see module doc), 8h is only the fallback
+    // for a delta that updates the rate without repeating this field
+    let interval_secs: u64 = data.funding_interval_hour
+        .as_deref()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(|hours| hours * 3_600)
+        .unwrap_or(28_800);
+
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -109,7 +120,7 @@ fn dispatch(text: &str, tx: &broadcast::Sender<FundingRateEvent>) {
         venue:           Venue::Bybit,
         symbol:          data.symbol,
         rate,
-        interval_secs:   28_800, // TODO: verify per-symbol; some bybit markets are 4h
+        interval_secs,
         next_funding_ts: next_ts,
         fetched_at_ms:   now_ms,
     });
@@ -140,4 +151,72 @@ struct BybitTickerData {
     funding_rate: Option<String>,
     #[serde(rename = "nextFundingTime")]
     next_funding_time: Option<String>,
+    #[serde(rename = "fundingIntervalHour")]
+    funding_interval_hour: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn dispatch_reads_the_real_funding_interval_hour_field() {
+        let (tx, mut rx) = broadcast::channel(4);
+        let snapshot = serde_json::json!({
+            "topic": "tickers.BTCUSDT", "type": "snapshot",
+            "data": { "symbol": "BTCUSDT", "fundingRate": "-0.005", "nextFundingTime": "1760342400000", "fundingIntervalHour": "8" }
+        }).to_string();
+        dispatch(&snapshot, &tx);
+
+        let ev = rx.recv().await.unwrap();
+        assert_eq!(ev.interval_secs, 8 * 3_600);
+    }
+
+    #[tokio::test]
+    async fn dispatch_reads_a_non_default_interval_instead_of_assuming_8h() {
+        let (tx, mut rx) = broadcast::channel(4);
+        // exactly the case the module doc warns about: not every market is 8h
+        let snapshot = serde_json::json!({
+            "topic": "tickers.SOMEUSDT", "type": "snapshot",
+            "data": { "symbol": "SOMEUSDT", "fundingRate": "0.0001", "nextFundingTime": "0", "fundingIntervalHour": "4" }
+        }).to_string();
+        dispatch(&snapshot, &tx);
+
+        let ev = rx.recv().await.unwrap();
+        assert_eq!(ev.interval_secs, 4 * 3_600);
+    }
+
+    #[tokio::test]
+    async fn dispatch_falls_back_to_8h_only_when_the_field_is_genuinely_missing() {
+        let (tx, mut rx) = broadcast::channel(4);
+        // a delta that updates the rate without repeating fundingIntervalHour
+        let delta = serde_json::json!({
+            "topic": "tickers.BTCUSDT", "type": "delta",
+            "data": { "symbol": "BTCUSDT", "fundingRate": "0.0002" }
+        }).to_string();
+        dispatch(&delta, &tx);
+
+        let ev = rx.recv().await.unwrap();
+        assert_eq!(ev.interval_secs, 28_800);
+    }
+
+    #[tokio::test]
+    async fn dispatch_ignores_op_level_messages() {
+        let (tx, mut rx) = broadcast::channel(4);
+        let ack = serde_json::json!({ "op": "subscribe", "success": true }).to_string();
+        dispatch(&ack, &tx);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn dispatch_ignores_a_ticker_delta_with_no_funding_rate() {
+        let (tx, mut rx) = broadcast::channel(4);
+        // e.g. a price-only tick, funding fields aren't in every delta
+        let delta = serde_json::json!({
+            "topic": "tickers.BTCUSDT", "type": "delta",
+            "data": { "symbol": "BTCUSDT" }
+        }).to_string();
+        dispatch(&delta, &tx);
+        assert!(rx.try_recv().is_err());
+    }
 }
