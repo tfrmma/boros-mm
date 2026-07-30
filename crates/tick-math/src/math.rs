@@ -31,8 +31,14 @@ pub(crate) fn u128_wide_mul(a: u128, b: u128) -> (u128, u128) {
 /// ~15.9 significant decimal digits. Good enough for shadow margin sim;
 /// the on-chain contracts are the source of truth anyway.
 ///
-/// TODO: replace with exact 256/128 integer division when we have the
-///       correct Knuth D implementation. See mul_div_exact below (stub).
+/// Exact 256/128 integer division exists now (`mul_div_floor`/`mul_div_ceil`/
+/// `mul_div_trunc` below, all built on `div_u256_by_u128`'s real bit-serial
+/// long division). This function stays f64-based on purpose, not because
+/// the exact path is missing: `FixedX18::mul_fixed`/`div_fixed`/`mul_raw`
+/// (the callers of this function) are kept as the approximate variants for
+/// existing callers that haven't been migrated to an exact-rounding
+/// method, see `fixed.rs`'s doc comment on why that migration isn't done
+/// silently.
 #[inline]
 pub(crate) fn mul_div_approx(a: i128, b: i128, d: i128) -> Result<i128, MathError> {
     if d == 0 {
