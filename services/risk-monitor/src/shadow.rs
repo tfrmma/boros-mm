@@ -15,7 +15,7 @@ use tick_math::FixedX18;
 
 use crate::rest::{BorosRestClient, MarketResponse, RestError};
 
-fn parse_decimal_string(field_name: &str, s: &str) -> Result<FixedX18, RestError> {
+pub(crate) fn parse_decimal_string(field_name: &str, s: &str) -> Result<FixedX18, RestError> {
     // REST returns human decimal strings ("0.05"), not the raw-integer
     // convention feed-ingest's parse_fixed_x18_raw expects. f64 roundtrip
     // loses a few bits of precision, acceptable for a shadow/monitoring
@@ -84,7 +84,7 @@ pub fn compute_shadow_health_ratio(
         cash,
         positions: positions.iter().map(|(id, size)| Position { market_id: MarketId(*id), size: *size }).collect(),
         open_orders: vec![], // see module doc, MM doesn't need these
-        last_settled_at: 0,  // TODO: not fetched yet, health_ratio doesn't use it directly, but Position::value's PV calc assumes settlement is current, see Position doc comment
+        last_settled_at: 0,  // no service in this workspace wires settlement-ledger into its live position loop yet, there's nothing real to put here, see settlement-ledger's own crate doc for what would need to change first
     };
 
     Ok(engine.compute_account_state(&account)?.health_ratio)
