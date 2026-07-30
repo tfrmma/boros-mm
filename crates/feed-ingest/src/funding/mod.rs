@@ -1,10 +1,12 @@
 mod binance;
 mod bybit;
 mod hyperliquid;
+mod okx;
 
 pub use binance::BinanceFundingFeed;
 pub use bybit::BybitFundingFeed;
 pub use hyperliquid::HyperliquidFundingFeed;
+pub use okx::OkxFundingFeed;
 
 use async_trait::async_trait;
 use tokio::sync::broadcast;
