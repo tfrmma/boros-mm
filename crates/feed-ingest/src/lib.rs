@@ -23,7 +23,7 @@ pub use state::BookStateManager;
 use tokio::sync::broadcast;
 
 use boros::BorosFeedHandler;
-use funding::{BinanceFundingFeed, BybitFundingFeed, FundingSource, HyperliquidFundingFeed};
+use funding::{BinanceFundingFeed, BybitFundingFeed, FundingSource, HyperliquidFundingFeed, OkxFundingFeed};
 
 // ── FeedBus ───────────────────────────────────────────────────────────────────
 
@@ -103,8 +103,7 @@ pub fn start(cfg: FeedIngestConfig) -> FeedBus {
                 tokio::spawn(HyperliquidFundingFeed { cfg: source }.run(tx));
             }
             Venue::Okx => {
-                // TODO: implement OKX funding feed
-                tracing::warn!("OKX funding feed not yet implemented, skipping");
+                tokio::spawn(OkxFundingFeed { cfg: source }.run(tx));
             }
         }
     }
