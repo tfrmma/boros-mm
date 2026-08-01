@@ -101,6 +101,26 @@ impl OrderId {
     }
 }
 
+impl TryFrom<u64> for OrderId {
+    type Error = OmsError;
+
+    /// Builds an `OrderId` from an already-packed value, e.g. one received
+    /// over the wire as a decimal string and parsed back to `u64`. Only
+    /// checks the initialized-marker bit, nothing else needs checking: side
+    /// (1 bit), encoded tick (16 bits), and order_index (40 bits, exactly
+    /// `ORDER_INDEX_MASK`) partition the remaining 63 bits exactly, so
+    /// every value with the marker bit set decodes to some valid
+    /// `(side, tick, order_index)` triple and re-encoding that triple
+    /// reproduces the same bits by construction. There's no "corrupt but
+    /// marker-bit-set" raw value this bit layout can represent.
+    fn try_from(raw: u64) -> Result<Self, OmsError> {
+        if raw & INITIALIZED_MARKER == 0 {
+            return Err(OmsError::OrderIdNotInitialized(raw));
+        }
+        Ok(Self(raw))
+    }
+}
+
 /// Mirrors `OrderIdLib._encodeTickIndex`: XOR with the sign bit turns the
 /// signed tick into a monotonically-ordered unsigned value (standard
 /// signed-to-unsigned ordering transform); for LONG, bitwise-NOT on top of
@@ -196,5 +216,30 @@ mod tests {
         assert_eq!(Side::Long.opposite(), Side::Short);
         assert_eq!(Side::Short.opposite(), Side::Long);
         assert_eq!(Side::Long.opposite().opposite(), Side::Long);
+    }
+
+    #[test]
+    fn try_from_u64_round_trips_a_value_this_encoder_produced() {
+        let original = OrderId::from_parts(Side::Short, -42, 12345).unwrap();
+        let rebuilt = OrderId::try_from(original.raw()).unwrap();
+        assert_eq!(rebuilt, original);
+        assert_eq!(rebuilt.unpack(), (Side::Short, -42, 12345));
+    }
+
+    #[test]
+    fn try_from_u64_rejects_missing_initialized_bit() {
+        let raw_without_marker = OrderId::from_parts(Side::Long, 0, 0).unwrap().raw() & !INITIALIZED_MARKER;
+        let err = OrderId::try_from(raw_without_marker).unwrap_err();
+        assert_eq!(err, OmsError::OrderIdNotInitialized(raw_without_marker));
+    }
+
+    #[test]
+    fn try_from_u64_accepts_every_marker_bit_set_value_regardless_of_tick_or_side() {
+        // the bit layout is a bijection over the 63 non-marker bits, so
+        // there's no "marker set but otherwise invalid" raw value, this
+        // just exercises the extremes to make that concrete
+        for raw in [INITIALIZED_MARKER, u64::MAX, INITIALIZED_MARKER | (1 << 56), INITIALIZED_MARKER | ORDER_INDEX_MASK] {
+            assert!(OrderId::try_from(raw).is_ok(), "raw={raw:#x} should decode to some valid triple");
+        }
     }
 }
