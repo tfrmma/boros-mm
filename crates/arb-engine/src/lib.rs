@@ -6,8 +6,9 @@
 //!   funding, cash-and-carry-style relative value between two different
 //!   funding-rate-realization mechanisms.
 //! - `calendar_spread`: wraps `curve_engine::ButterflySignal` into a
-//!   directional trade (which side at the mid maturity, opposite at the
-//!   wings). Not DV01-sized, that's the caller's job.
+//!   directional, DV01-neutral-sized trade (which side at the mid
+//!   maturity, opposite at the wings, each wing sized to offset half the
+//!   mid leg's DV01). The caller still picks the mid leg's own notional.
 
 mod calendar_spread;
 mod cross_venue;
