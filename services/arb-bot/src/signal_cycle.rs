@@ -96,16 +96,17 @@ async fn place_leg(
     runtimes: &mut HashMap<u32, MarketRuntime>,
     execution: &mut ExecutionClient,
     side: Side,
+    size: f64,
     rate: FixedX18,
 ) -> Result<bool, SignalCycleError> {
-    let (market_acc, tick_step, base_size) = {
+    let (market_acc, tick_step) = {
         let r = runtimes.get(&market_id).expect("market_id came from this map's own keys");
-        (r.config.market_acc.clone(), r.config.tick_step, r.config.base_size)
+        (r.config.market_acc.clone(), r.config.tick_step)
     };
     let rounding = match side { Side::Long => Rounding::Floor, Side::Short => Rounding::Ceil };
     let tick = rate_to_tick(rate, tick_step, rounding)?;
 
-    let outcome = execution.place_order(market_acc, market_id, side, FixedX18::from_f64(base_size), Some(tick as i32), None, TimeInForce::Alo).await?;
+    let outcome = execution.place_order(market_acc, market_id, side, FixedX18::from_f64(size), Some(tick as i32), None, TimeInForce::Alo).await?;
 
     let runtime = runtimes.get_mut(&market_id).expect("market_id came from this map's own keys");
     match outcome.order_id {
@@ -140,21 +141,22 @@ async fn cancel_leg(market_id: u32, runtimes: &mut HashMap<u32, MarketRuntime>, 
 }
 
 /// Closes one leg of a reversed signal: opposite side of `entry_side`,
-/// IOC (crosses the book now instead of resting), same base size as the
-/// original entry. This is a best-effort reversal, not a guaranteed
-/// close: an IOC still needs matching liquidity on the other side, a thin
-/// book can leave part of it unfilled. Doesn't touch `resting_legs`
-/// (a filled reversal is a new position, not a cancellation of the old
-/// order), the caller is expected to drop the leg from its active-signal
-/// tracking regardless of fill outcome, `reconcile.rs` picks up the real
-/// resulting position on its own schedule.
-async fn unwind_leg(market_id: u32, runtimes: &HashMap<u32, MarketRuntime>, execution: &mut ExecutionClient, entry_side: Side, slippage: f64) {
-    let (market_acc, base_size) = {
-        let r = runtimes.get(&market_id).expect("market_id came from this map's own keys");
-        (r.config.market_acc.clone(), r.config.base_size)
-    };
+/// IOC (crosses the book now instead of resting), the exact `size` that
+/// was entered on that leg, not the market's uniform config default,
+/// calendar spread wings enter at their own DV01-neutral size (see
+/// `arb_engine::dv01_neutral_wing_size`), closing at a different size
+/// would leave a residual instead of flattening the position. This is a
+/// best-effort reversal, not a guaranteed close: an IOC still needs
+/// matching liquidity on the other side, a thin book can leave part of it
+/// unfilled. Doesn't touch `resting_legs` (a filled reversal is a new
+/// position, not a cancellation of the old order), the caller is expected
+/// to drop the leg from its active-signal tracking regardless of fill
+/// outcome, `reconcile.rs` picks up the real resulting position on its
+/// own schedule.
+async fn unwind_leg(market_id: u32, runtimes: &HashMap<u32, MarketRuntime>, execution: &mut ExecutionClient, entry_side: Side, size: f64, slippage: f64) {
+    let market_acc = runtimes.get(&market_id).expect("market_id came from this map's own keys").config.market_acc.clone();
     let closing_side = entry_side.opposite();
-    match execution.place_order(market_acc, market_id, closing_side, FixedX18::from_f64(base_size), None, Some(slippage), TimeInForce::Ioc).await {
+    match execution.place_order(market_acc, market_id, closing_side, FixedX18::from_f64(size), None, Some(slippage), TimeInForce::Ioc).await {
         Ok(outcome) => tracing::info!(market_id, ?closing_side, filled = ?outcome.filled_size, "unwind order sent for reversed signal"),
         Err(e) => tracing::error!(market_id, ?closing_side, "unwind order failed, position may still be open, needs manual review: {e}"),
     }
@@ -208,8 +210,8 @@ pub async fn run_calendar_scan(
     for key in reversed {
         let active = active_spreads.remove(&key).expect("key came from this map's own keys");
         tracing::info!(?key, "calendar spread signal reverted or flipped, unwinding all legs");
-        for (market_id, side) in active.legs {
-            unwind_leg(market_id, runtimes, execution, side, unwind_slippage).await;
+        for (market_id, side, size) in active.legs {
+            unwind_leg(market_id, runtimes, execution, side, size, unwind_slippage).await;
         }
     }
 
@@ -232,17 +234,17 @@ pub async fn run_calendar_scan(
         };
 
         let entry_deviation_positive = signal.deviation > 0.0;
-        let trade = to_calendar_spread_trade(signal);
+        let mid_size = runtimes.get(&mid_id).expect("looked up above").config.base_size;
+        let trade = to_calendar_spread_trade(signal, mid_size);
         let (mid_rate, left_rate, right_rate) = {
             let r = |id: u32| runtimes.get(&id).expect("looked up above").market_state.mark_rate;
             (r(mid_id), r(left_id), r(right_id))
         };
-        let base_size = runtimes.get(&mid_id).expect("looked up above").config.base_size;
 
         let margin_account = build_margin_account(account, token_id, runtimes);
-        let mid_ok = check_leg(mid_id, trade.mid_side, base_size, mid_rate, &margin_engine, &margin_account, market_states, limits, order_tracker);
-        let left_ok = mid_ok && check_leg(left_id, trade.wing_side, base_size, left_rate, &margin_engine, &margin_account, market_states, limits, order_tracker);
-        let right_ok = left_ok && check_leg(right_id, trade.wing_side, base_size, right_rate, &margin_engine, &margin_account, market_states, limits, order_tracker);
+        let mid_ok = check_leg(mid_id, trade.mid_side, trade.mid_size, mid_rate, &margin_engine, &margin_account, market_states, limits, order_tracker);
+        let left_ok = mid_ok && check_leg(left_id, trade.wing_side, trade.left_size, left_rate, &margin_engine, &margin_account, market_states, limits, order_tracker);
+        let right_ok = left_ok && check_leg(right_id, trade.wing_side, trade.right_size, right_rate, &margin_engine, &margin_account, market_states, limits, order_tracker);
 
         if !(mid_ok && left_ok && right_ok) {
             tracing::info!(?key, deviation = trade.signal.deviation, "calendar spread signal detected but blocked by pre-trade checks, skipping");
@@ -252,21 +254,21 @@ pub async fn run_calendar_scan(
         tracing::info!(?key, deviation = trade.signal.deviation, mid_id, left_id, right_id, "calendar spread signal, entering all three legs");
         cooldowns.mark_calendar(key);
 
-        let legs = [(mid_id, "mid", trade.mid_side), (left_id, "left", trade.wing_side), (right_id, "right", trade.wing_side)];
+        let legs = [(mid_id, "mid", trade.mid_side, trade.mid_size), (left_id, "left", trade.wing_side, trade.left_size), (right_id, "right", trade.wing_side, trade.right_size)];
         let rates = [mid_rate, left_rate, right_rate];
 
         let mut placed: Vec<(u32, oms_core::OrderId)> = Vec::new();
-        let mut entered_legs: Vec<(u32, Side)> = Vec::new();
+        let mut entered_legs: Vec<(u32, Side, f64)> = Vec::new();
         let mut any_failed = false;
 
         for i in 0..3 {
-            let (market_id, leg_name, side) = legs[i];
-            match place_leg(market_id, runtimes, execution, side, rates[i]).await {
+            let (market_id, leg_name, side, size) = legs[i];
+            match place_leg(market_id, runtimes, execution, side, size, rates[i]).await {
                 Ok(true) => {
                     order_tracker.record_placement();
                     let order_id = runtimes.get(&market_id).expect("just placed above").resting_legs.last().expect("just pushed above").order_id;
                     placed.push((market_id, order_id));
-                    entered_legs.push((market_id, side));
+                    entered_legs.push((market_id, side, size));
                 }
                 Ok(false) => {
                     any_failed = true;
@@ -347,7 +349,7 @@ pub async fn run_cross_venue_scan(
             if !still_valid {
                 let active = active_positions.remove(&market_id).expect("checked above");
                 tracing::info!(market_id, "cross-venue basis reverted or flipped, unwinding Boros leg");
-                unwind_leg(market_id, runtimes, execution, active.side, unwind_slippage).await;
+                unwind_leg(market_id, runtimes, execution, active.side, base_size, unwind_slippage).await;
             }
         }
 
@@ -365,7 +367,7 @@ pub async fn run_cross_venue_scan(
         tracing::info!(market_id, basis = signal.basis, ?signal.boros_side, "cross-venue signal, entering Boros leg (CEX hedge is NOT placed by this bot)");
         cooldowns.mark_cross_venue(market_id);
 
-        match place_leg(market_id, runtimes, execution, signal.boros_side, mark_rate).await {
+        match place_leg(market_id, runtimes, execution, signal.boros_side, base_size, mark_rate).await {
             Ok(true) => {
                 order_tracker.record_placement();
                 active_positions.insert(market_id, ActiveCrossVenue { side: signal.boros_side, entry_basis_positive: signal.basis > 0.0 });
