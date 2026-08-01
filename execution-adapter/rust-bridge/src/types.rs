@@ -49,32 +49,7 @@ pub fn order_id_to_string(id: oms_core::OrderId) -> String {
 
 pub fn order_id_from_string(s: &str) -> Result<oms_core::OrderId, BridgeError> {
     let raw: u64 = s.parse().map_err(|e| BridgeError::InvalidResponse(format!("bad OrderId '{s}': {e}")))?;
-    // OrderId has no public raw-u64 constructor (by design, from_parts is
-    // the only way to build one from semantic fields). Round-trip through
-    // unpack/from_parts to validate the initialized-marker bit and layout
-    // instead of transmuting an arbitrary u64.
-    let side = if (raw >> 56) & 1 == 1 { oms_core::Side::Short } else { oms_core::Side::Long };
-    if raw & (1u64 << 63) == 0 {
-        return Err(BridgeError::InvalidResponse(format!("OrderId '{s}' missing initialized-marker bit")));
-    }
-    let order_index = raw & ((1u64 << 40) - 1);
-    let encoded_tick = ((raw >> 40) & 0xFFFF) as u16;
-    // re-derive tick_index using the same transform oms_core::OrderId uses
-    // internally (duplicated here since it's private to that crate, see
-    // TODO below)
-    let e = if matches!(side, oms_core::Side::Long) { !encoded_tick } else { encoded_tick };
-    let tick_index = (e ^ (1u16 << 15)) as i16;
-
-    // TODO: oms_core::OrderId doesn't expose a `from_raw`/`try_from(u64)`
-    // constructor today, only `from_parts(side, tick, order_index)`, which
-    // re-encodes instead of trusting the wire value directly. That's
-    // safer (never trust a wire-supplied bit pattern without validating it
-    // decodes to something the encoder would produce), but it
-    // does mean this function duplicates oms_core's private tick decode
-    // logic instead of calling it. If that logic ever changes, this must
-    // change with it. Consider exposing `OrderId::from_raw_checked(u64)`
-    // in oms_core instead, once execution-adapter's needs are stable.
-    oms_core::OrderId::from_parts(side, tick_index, order_index).map_err(|e| BridgeError::InvalidResponse(format!("OrderId '{s}' round-trip failed: {e}")))
+    oms_core::OrderId::try_from(raw).map_err(|e| BridgeError::InvalidResponse(format!("OrderId '{s}': {e}")))
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
