@@ -23,7 +23,7 @@ pub struct RestingLeg {
 /// threshold or flips sign relative to `entry_deviation_positive`.
 #[derive(Debug, Clone)]
 pub struct ActiveCalendarSpread {
-    pub legs: Vec<(u32, Side)>,
+    pub legs: Vec<(u32, Side, f64)>,
     pub entry_deviation_positive: bool,
 }
 
