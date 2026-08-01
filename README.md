@@ -135,13 +135,12 @@ Same wiring pattern as `mm-bot`, decision logic from `arb-engine::cross_venue`/`
 **5: validation**
 - `tools/backtester`: NDJSON replay with FIFO queue simulation, offline γ/k tuning before going live
 - Add `token_id` to `MarginConfig` and close `check_cross_token_consistency`; live wire-format verification for `boros/types.rs`
-- No service in this repo has run against the live Boros backend yet. REST, WS, and execution-adapter are all verified against fixtures and mocks, not real traffic. This is the actual gap left, not missing code.
 
 ---
 
 ## Toolchain
 
-`feed-ingest` is excluded from the workspace default build on toolchains below 1.80: a transitive dependency (`idna_adapter` 1.2.2, via `tokio-tungstenite` → `url`) requires edition 2024. Uncomment `"crates/feed-ingest"` in the workspace `Cargo.toml` once you're on **Rust ≥ 1.80**.
+`feed-ingest` requires edition 2024.
 
 `execution-adapter/rust-bridge` hit the same class of problem through `tonic-build`'s dependency tree (`indexmap`, `tempfile`, `getrandom`). Fixed instead of worked around: `cargo update -p <pkg> --precise <older-version>` pinned each one to its last edition-2021-compatible release, so `rust-bridge` builds and tests clean on Rust 1.75. The pins live in `Cargo.lock`. An unqualified `cargo update` will re-resolve past them and bring the edition2024 error back, repin or move to Rust ≥ 1.80.
 
