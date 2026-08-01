@@ -40,18 +40,26 @@ pub struct CrossVenueSignal {
     pub boros_side: Side,
 }
 
-/// A `curve_engine::ButterflySignal` translated into a directional trade:
-/// which side to take at the mid maturity, and the opposite side at both
-/// wings.
+/// A `curve_engine::ButterflySignal` translated into a directional,
+/// DV01-sized trade: which side to take at the mid maturity, the opposite
+/// side at both wings, and how much size on each leg so the combined
+/// position is close to flat to a parallel curve shift.
 ///
-/// Not DV01-sized here: a true risk-minimized butterfly needs the wings
-/// weighted by relative DV01 sensitivity so the combined position is close
-/// to flat to a parallel curve shift, which needs position-sizing context
-/// (account size, risk budget) this crate doesn't have. This gives the
-/// *direction*; `risk-engine`/the caller sizes it.
+/// DV01 (see `risk-engine::dv01`) is `|size| * ttm_years * 0.0001`, no
+/// dependence on the rate itself, only size and time-to-maturity. So for
+/// the wing DV01 to offset the mid DV01, the `ttm_years * 0.0001` factor
+/// cancels out of the ratio and this reduces to a plain maturity ratio,
+/// no need to depend on `risk-engine` or duplicate its formula's constant
+/// here. Each wing carries half the offsetting DV01, split evenly rather
+/// than weighted toward the nearer or farther wing, there's no strong
+/// reason to prefer either without more context (curvature, liquidity)
+/// this crate doesn't have.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CalendarSpreadTrade {
     pub signal: curve_engine::ButterflySignal,
     pub mid_side: Side,
     pub wing_side: Side,
+    pub mid_size: f64,
+    pub left_size: f64,
+    pub right_size: f64,
 }
