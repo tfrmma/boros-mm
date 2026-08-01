@@ -6,6 +6,9 @@ pub enum OmsError {
     #[error("order_index {0} exceeds the 40-bit range the contract allows (max {})", (1u64 << 40) - 1)]
     OrderIndexOverflow(u64),
 
+    #[error("raw OrderId {0:#x} is missing the initialized-marker bit (63)")]
+    OrderIdNotInitialized(u64),
+
     #[error("LimitOrderPlaced ids/sizes length mismatch: {ids} ids vs {sizes} sizes")]
     MismatchedPlacedLengths { ids: usize, sizes: usize },
 
