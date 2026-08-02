@@ -10,19 +10,6 @@ members = [
     "crates/risk-engine",
     "crates/arb-engine",
     "execution-adapter/rust-bridge",
-    # feed-ingest, re-enabled 2026-07-18, workspace build CONFIRMED on a real
-    # Rust 1.85+ toolchain 2026-07-19 (Windows, cargo build --workspace,
-    # Finished dev profile in 13.68s, only 3 warnings, all fixed same day).
-    # book.rs/state.rs rewritten against the real aggregated-snapshot
-    # BookEvent (no delta/seq), keyed by (market_id, tick_size, include_amm)
-    # so the plain-CLOB and CLOB+AMM-merged views of the same market can't
-    # collide. lib.rs's FeedBus gained statistics/account_updates channels
-    # 2026-07-19, boros/mod.rs now routes all 6 event families instead of
-    # logging 3 of them. `boros/mod.rs` itself still only verified by a real
-    # build once (2026-07-19), everything else in this crate has real
-    # `cargo test` behind it too, this sandbox is still stuck on Rust 1.75
-    # (see rust-version above) for anything touching rust_socketio, so that
-    # verification only ever happens on the user's real toolchain.
     "crates/feed-ingest",
     "services/risk-monitor",
     "services/mm-bot",
@@ -34,7 +21,7 @@ members = [
 version      = "0.1.0"
 edition      = "2021"
 license      = "MIT"
-rust-version = "1.85" # bumped 2026-07-18 from 1.75. zeroize 1.9.0 (via rust_socketio -> reqwest -> hyper-rustls -> rustls-pki-types) AND idna_adapter 1.2.2 (via tokio-tungstenite -> url, independent of rust_socketio) both need edition2024. Confirmed compiling clean end-to-end on a real Windows Rust 1.85+ toolchain 2026-07-19 (cargo build --workspace, only failure was a missing protoc, unrelated to the toolchain itself).
+rust-version = "1.85"
 
 [workspace.dependencies]
 thiserror          = "1"
