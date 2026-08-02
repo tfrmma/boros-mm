@@ -129,9 +129,24 @@ pub struct PositionInSyncResponse {
     pub notional_size: String,
 }
 
+/// Confirmed in docs.pendle.finance/boros-dev/Backend/api: `GET
+/// /accounts/active-positions`'s response "includes syncStatus
+/// (blockNumber + timestamp)". Same shape as
+/// `feed-ingest::event::SyncStatus`, this crate doesn't depend on
+/// `feed-ingest` (it's REST-only, no WS), so this is its own small copy
+/// instead of pulling in that whole crate for one struct.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStatus {
+    pub block_number: u64,
+    pub timestamp: u64,
+}
+
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PositionsInSyncResponse {
     pub results: Vec<PositionInSyncResponse>,
+    pub sync_status: SyncStatus,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -164,4 +179,33 @@ pub struct CollateralSummaryResponse {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SingleCollateralSummaryResponse {
     pub collateral: CollateralSummaryResponse,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn positions_in_sync_response_parses_sync_status_alongside_results() {
+        // shape per docs.pendle.finance/boros-dev/Backend/api: "Response
+        // includes syncStatus (blockNumber + timestamp)"
+        let json = r#"{
+            "results": [ { "marketId": 1, "notionalSize": "1000.0" } ],
+            "syncStatus": { "blockNumber": 123456789, "timestamp": 1760342400 }
+        }"#;
+        let parsed: PositionsInSyncResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.results.len(), 1);
+        assert_eq!(parsed.sync_status.block_number, 123_456_789);
+        assert_eq!(parsed.sync_status.timestamp, 1_760_342_400);
+    }
+
+    #[test]
+    fn positions_in_sync_response_requires_sync_status() {
+        // if this ever regresses to an Option or gets dropped silently,
+        // this test catches it: missing syncStatus should fail to parse,
+        // not silently default last_settled_at back to 0
+        let json = r#"{ "results": [] }"#;
+        let result: Result<PositionsInSyncResponse, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
 }
