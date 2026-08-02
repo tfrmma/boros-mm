@@ -126,7 +126,7 @@ async fn poll_once(
     // path that would need it, this account-wide summary doesn't.
     let cash = shadow::parse_decimal_string("netBalance", &collateral.collateral.cross_position.net_balance)?;
 
-    let shadow_ratio = shadow::compute_shadow_health_ratio(configs, market_states, &positions, cash, cfg.token_id)?;
+    let shadow_ratio = shadow::compute_shadow_health_ratio(configs, market_states, &positions, cash, cfg.token_id, positions_resp.sync_status.timestamp)?;
 
     let real_ratio = collateral.collateral.cross_position.margin_ratio;
 
