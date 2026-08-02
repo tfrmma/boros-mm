@@ -1,0 +1,14 @@
+[package]
+name = "backtester"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tick-math      = { path = "../../crates/tick-math" }
+oms-core       = { path = "../../crates/oms-core" }
+quoting-engine = { path = "../../crates/quoting-engine" }
+
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
