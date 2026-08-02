@@ -27,6 +27,7 @@ members = [
     "services/risk-monitor",
     "services/mm-bot",
     "services/arb-bot",
+    "tools/backtester",
 ]
 
 [workspace.package]
