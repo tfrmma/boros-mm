@@ -65,12 +65,18 @@ pub fn market_state_from_response(market: &MarketResponse, now_secs: u64) -> Res
 /// the caller (this module doesn't fetch market data itself, keeping
 /// REST-fetching centralized in `main.rs`'s poll loop instead of spread
 /// across two modules).
+///
+/// `last_settled_at` is the active-positions response's own
+/// `syncStatus.timestamp` (see `PositionsInSyncResponse`), the real
+/// on-chain-synced-as-of timestamp Boros's API reports for that response,
+/// not something this crate computes itself.
 pub fn compute_shadow_health_ratio(
     configs: Vec<(u32, MarginConfig)>,
     market_states: Vec<(u32, MarketState)>,
     positions: &[(u32, FixedX18)],
     cash: FixedX18,
     token_id: u32,
+    last_settled_at: u64,
 ) -> Result<f64, margin_sim::MarginError> {
     let engine = MarginEngine::new(
         configs.into_iter().map(|(id, cfg)| (MarketId(id), cfg)).collect(),
@@ -84,7 +90,7 @@ pub fn compute_shadow_health_ratio(
         cash,
         positions: positions.iter().map(|(id, size)| Position { market_id: MarketId(*id), size: *size }).collect(),
         open_orders: vec![], // see module doc, MM doesn't need these
-        last_settled_at: 0,  // no service in this workspace wires settlement-ledger into its live position loop yet, there's nothing real to put here, see settlement-ledger's own crate doc for what would need to change first
+        last_settled_at,
     };
 
     Ok(engine.compute_account_state(&account)?.health_ratio)
@@ -126,6 +132,7 @@ mod tests {
                 PositionInSyncResponse { market_id: 1, notional_size: "100.5".to_owned() },
                 PositionInSyncResponse { market_id: 2, notional_size: "-50.0".to_owned() },
             ],
+            sync_status: crate::rest::SyncStatus { block_number: 1, timestamp: 1_760_000_000 },
         };
         let parsed = parse_positions(&resp).unwrap();
         assert_eq!(parsed, vec![(1, FixedX18::from_f64(100.5)), (2, FixedX18::from_f64(-50.0))]);
